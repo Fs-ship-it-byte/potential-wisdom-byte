@@ -831,6 +831,60 @@ app.get('/debug/ffcheck', (req, res) => {
 // Test de red simple y directo (sin ffprobe) para ver si Railway puede conectar
 // al CDN de origen. Muestra el error real (timeout, DNS, conexión rechazada, etc.)
 // Uso: /debug/nettest?url=<tu link completo de /hlsproxy/playlist/TOKEN/master.m3u8>
+// Test de punta a punta, cronometrado, SIN copy-paste humano de por medio:
+// busca el título, resuelve VidHide, y pide el m3u8 inmediatamente después,
+// todo en la misma llamada. Sirve para descartar que el 403 sea por el TIEMPO
+// transcurrido (token vencido) en vez de por bloqueo de IP/headers.
+// Uso: /debug/e2e?imdb=tt1234567&type=movie
+app.get('/debug/e2e', async (req, res) => {
+    const imdbId = req.query.imdb;
+    const type = req.query.type || 'movie';
+    if (!imdbId) return res.status(400).send('Falta ?imdb=ttXXXXXXX');
+
+    res.set('Content-Type', 'text/plain');
+    const timeline = [];
+    const mark = (label) => timeline.push(`[${Date.now() - t0}ms] ${label}`);
+    const t0 = Date.now();
+
+    try {
+        const metaRes = await axios.get(`https://v3-cinemeta.strem.io/meta/${type}/${imdbId}.json`);
+        const titleToSearch = metaRes.data && metaRes.data.meta && metaRes.data.meta.name;
+        mark('Meta obtenida: ' + titleToSearch);
+        if (!titleToSearch) return res.send(timeline.join('\n') + '\n\nNo se encontró título.');
+
+        const searchResults = await searchPoseidon2hd(titleToSearch);
+        if (!searchResults || !searchResults.length) return res.send(timeline.join('\n') + '\n\nSin resultados en Poseidon.');
+        mark('Encontrado en Poseidon: ' + searchResults[0].url);
+
+        const poseidonData = await fetchPoseidonHD2Streams(searchResults[0].url);
+        if (!poseidonData || !poseidonData.streams) return res.send(timeline.join('\n') + '\n\nSin streams.');
+        mark('Streams de Poseidon obtenidos: ' + poseidonData.streams.map(s => s.label).join(', '));
+
+        const vidhide = poseidonData.streams.find(s => s.label.toLowerCase().includes('vidhide'));
+        if (!vidhide) return res.send(timeline.join('\n') + '\n\nNo hay stream VidHide en este título.');
+
+        const hlsData = await resolveVidHideHls(vidhide.playerUrl);
+        if (!hlsData) return res.send(timeline.join('\n') + '\n\nresolveVidHideHls no devolvió nada.');
+        const hlsUrl = typeof hlsData === 'string' ? hlsData : hlsData.url;
+        mark('URL m3u8 obtenida: ' + hlsUrl);
+
+        // Pedimos el m3u8 INMEDIATAMENTE, sin ningún paso manual en el medio.
+        const upstream = await axios.get(hlsUrl, {
+            headers: { 'Referer': 'https://callistanise.com/', 'Origin': 'https://callistanise.com', 'User-Agent': PS_UA['User-Agent'] },
+            timeout: 12000,
+            responseType: 'text',
+            transformResponse: [(d) => d],
+            validateStatus: () => true
+        });
+        mark('Respuesta del m3u8: status ' + upstream.status);
+
+        res.send(timeline.join('\n') + '\n\nBody (primeros 500 chars):\n' + String(upstream.data).slice(0, 500));
+    } catch (e) {
+        mark('ERROR: ' + e.message);
+        res.status(500).send(timeline.join('\n'));
+    }
+});
+
 app.get('/debug/nettest', async (req, res) => {
     const proxyUrl = req.query.url;
     if (!proxyUrl) return res.status(400).send('Falta el parámetro ?url=');
