@@ -824,6 +824,52 @@ app.get('/debug/ffcheck', (req, res) => {
     });
 });
 
+// Prueba ffprobe directo contra la URL ORIGINAL del CDN (bypaseando nuestro propio
+// proxy), usando -headers para pasarle Referer/Origin/UA. Sirve para aislar si el
+// problema está en el CDN de origen o en nuestro proxy de hlsproxy.
+// Uso: /debug/rawprobe?url=<tu link completo de /hlsproxy/playlist/TOKEN/master.m3u8>
+app.get('/debug/rawprobe', (req, res) => {
+    const proxyUrl = req.query.url;
+    if (!proxyUrl) return res.status(400).send('Falta el parámetro ?url= (pegá tu link completo de /hlsproxy/playlist/.../master.m3u8)');
+
+    const m = proxyUrl.match(/\/hlsproxy\/playlist\/([^/]+)\//);
+    if (!m) return res.status(400).send('Esa URL no es un link de /hlsproxy/playlist/...');
+
+    const data = decodeProxyToken(m[1]);
+    if (!data) return res.status(400).send('No se pudo decodificar el token');
+
+    const headerStr = Object.entries(data.headers || {}).map(([k, v]) => `${k}: ${v}`).join('\r\n') + '\r\n';
+
+    const ff = spawn(ffprobePath, [
+        '-hide_banner',
+        '-v', 'error',
+        '-headers', headerStr,
+        '-of', 'json',
+        '-show_streams',
+        '-show_format',
+        data.url
+    ]);
+
+    let out = '';
+    let err = '';
+    ff.stdout.on('data', (d) => { out += d; });
+    ff.stderr.on('data', (d) => { err += d; });
+    ff.on('error', (e) => {
+        res.set('Content-Type', 'text/plain');
+        res.status(500).send('Error al ejecutar ffprobe: ' + e.message);
+    });
+    ff.on('close', (code) => {
+        res.set('Content-Type', 'text/plain');
+        res.send(
+            'URL original consultada (bypass de nuestro proxy):\n' + data.url +
+            '\n\nHeaders usados:\n' + headerStr +
+            '\n\nExit code: ' + code +
+            '\n\nstdout:\n' + (out || '(vacío)') +
+            '\n\nstderr:\n' + (err || '(vacío)')
+        );
+    });
+});
+
 app.get('/debug/probe', (req, res) => {
     const target = req.query.url;
     if (!target) return res.status(400).send('Falta el parámetro ?url=');
