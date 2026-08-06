@@ -828,6 +828,46 @@ app.get('/debug/ffcheck', (req, res) => {
 // proxy), usando -headers para pasarle Referer/Origin/UA. Sirve para aislar si el
 // problema está en el CDN de origen o en nuestro proxy de hlsproxy.
 // Uso: /debug/rawprobe?url=<tu link completo de /hlsproxy/playlist/TOKEN/master.m3u8>
+// Test de red simple y directo (sin ffprobe) para ver si Railway puede conectar
+// al CDN de origen. Muestra el error real (timeout, DNS, conexión rechazada, etc.)
+// Uso: /debug/nettest?url=<tu link completo de /hlsproxy/playlist/TOKEN/master.m3u8>
+app.get('/debug/nettest', async (req, res) => {
+    const proxyUrl = req.query.url;
+    if (!proxyUrl) return res.status(400).send('Falta el parámetro ?url=');
+
+    const m = proxyUrl.match(/\/hlsproxy\/playlist\/([^/]+)\//);
+    if (!m) return res.status(400).send('Esa URL no es un link de /hlsproxy/playlist/...');
+
+    const data = decodeProxyToken(m[1]);
+    if (!data) return res.status(400).send('No se pudo decodificar el token');
+
+    res.set('Content-Type', 'text/plain');
+    const start = Date.now();
+    try {
+        const upstream = await axios.get(data.url, {
+            headers: data.headers,
+            timeout: 12000,
+            responseType: 'text',
+            transformResponse: [(d) => d],
+            validateStatus: () => true
+        });
+        res.send(
+            'URL: ' + data.url +
+            '\nTiempo: ' + (Date.now() - start) + 'ms' +
+            '\nStatus: ' + upstream.status +
+            '\nHeaders respuesta: ' + JSON.stringify(upstream.headers, null, 2) +
+            '\n\nPrimeros 500 caracteres del body:\n' + String(upstream.data).slice(0, 500)
+        );
+    } catch (e) {
+        res.send(
+            'URL: ' + data.url +
+            '\nTiempo hasta el error: ' + (Date.now() - start) + 'ms' +
+            '\nError code: ' + (e.code || 'N/A') +
+            '\nError message: ' + e.message
+        );
+    }
+});
+
 app.get('/debug/rawprobe', (req, res) => {
     const proxyUrl = req.query.url;
     if (!proxyUrl) return res.status(400).send('Falta el parámetro ?url= (pegá tu link completo de /hlsproxy/playlist/.../master.m3u8)');
