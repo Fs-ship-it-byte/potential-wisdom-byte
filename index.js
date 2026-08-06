@@ -806,12 +806,31 @@ app.get('/hlsproxy/segment/:token/*', handleHlsSegmentProxy);
 // Uso: https://tu-dominio/debug/probe?url=https://tu-dominio/hlsproxy/playlist/<token>/master.m3u8
 // Corre `ffprobe` contra la URL indicada (típicamente tu propio link de hlsproxy,
 // para que use los headers correctos) y devuelve los códecs reales de audio/video.
+// Chequeo rápido: confirma que el binario de ffprobe puede ejecutarse,
+// sin depender de red ni de ningún stream.
+app.get('/debug/ffcheck', (req, res) => {
+    const ff = spawn(ffprobePath, ['-version']);
+    let out = '';
+    let err = '';
+    ff.stdout.on('data', (d) => { out += d; });
+    ff.stderr.on('data', (d) => { err += d; });
+    ff.on('error', (e) => {
+        res.set('Content-Type', 'text/plain');
+        res.status(500).send('Error al ejecutar el binario: ' + e.message + '\nRuta: ' + ffprobePath);
+    });
+    ff.on('close', (code) => {
+        res.set('Content-Type', 'text/plain');
+        res.send('Ruta: ' + ffprobePath + '\nExit code: ' + code + '\n\nstdout:\n' + out + '\n\nstderr:\n' + err);
+    });
+});
+
 app.get('/debug/probe', (req, res) => {
     const target = req.query.url;
     if (!target) return res.status(400).send('Falta el parámetro ?url=');
 
     const ff = spawn(ffprobePath, [
         '-hide_banner',
+        '-v', 'error',
         '-of', 'json',
         '-show_streams',
         '-show_format',
@@ -826,9 +845,13 @@ app.get('/debug/probe', (req, res) => {
         res.set('Content-Type', 'text/plain');
         res.status(500).send('No se pudo ejecutar ffprobe: ' + e.message + '\n\nRuta usada: ' + ffprobePath);
     });
-    ff.on('close', () => {
+    ff.on('close', (code) => {
         res.set('Content-Type', 'text/plain');
-        res.send(out || ('ffprobe no devolvió JSON. stderr:\n' + err));
+        if (out) {
+            res.send(out);
+        } else {
+            res.send('ffprobe terminó con código ' + code + '.\n\nstderr:\n' + (err || '(vacío)') + '\n\nURL consultada:\n' + target);
+        }
     });
 });
 // --- FIN DIAGNÓSTICO TEMPORAL ---
