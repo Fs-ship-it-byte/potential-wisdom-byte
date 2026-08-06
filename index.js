@@ -3,6 +3,7 @@ const express = require('express');
 const axios = require('axios');
 const puppeteer = require('puppeteer');
 const { spawn } = require('child_process');
+const ffprobePath = require('ffprobe-static').path;
 const { URL } = require('url');
 
 // URL pública donde queda expuesto este addon (ver más abajo). Se usa para
@@ -809,7 +810,7 @@ app.get('/debug/probe', (req, res) => {
     const target = req.query.url;
     if (!target) return res.status(400).send('Falta el parámetro ?url=');
 
-    const ff = spawn('ffprobe', [
+    const ff = spawn(ffprobePath, [
         '-hide_banner',
         '-of', 'json',
         '-show_streams',
@@ -823,7 +824,7 @@ app.get('/debug/probe', (req, res) => {
     ff.stderr.on('data', (d) => { err += d; });
     ff.on('error', (e) => {
         res.set('Content-Type', 'text/plain');
-        res.status(500).send('No se pudo ejecutar ffprobe: ' + e.message + '\n\nAsegurate de que ffmpeg/ffprobe esté instalado en el contenedor (ver nixpacks.toml).');
+        res.status(500).send('No se pudo ejecutar ffprobe: ' + e.message + '\n\nRuta usada: ' + ffprobePath);
     });
     ff.on('close', () => {
         res.set('Content-Type', 'text/plain');
